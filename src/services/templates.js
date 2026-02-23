@@ -1,11 +1,8 @@
 /**
  * English delivery templates for Sellauth eSIM delivery.
- *
  * Each line is individually copyable in Sellauth's Deliverables view.
- * Labels on their own line, values on the next line.
  */
 
-// ─── Single eSIM Templates ───
 const singleTemplates = [
     `✅ Your eSIM is ready to go!
 
@@ -64,7 +61,6 @@ const singleTemplates = [
 2. ⚠️ IMPORTANT: You must enable Data Roaming on your device for the eSIM to work!`,
 ];
 
-// ─── Multi eSIM Templates ───
 const multiTemplates = [
     `✅ Your %COUNT% eSIMs are ready to go!
 
@@ -99,44 +95,22 @@ const multiTemplates = [
 2. ⚠️ IMPORTANT: Don't forget to enable Data Roaming for every eSIM!`,
 ];
 
-/**
- * Formats a single eSIM as a copyable block.
- *
- * Output (each line individually copyable in Sellauth):
- *
- *   ━━━ eSIM 1 of 3 ━━━         ← only for multi
- *   ICCID:
- *   89972502300029xxxx
- *   eSIM Installation:
- *   https://p.qrsim.net/xxxxx
- */
 function formatEsimBlock(esim, index, total) {
     const lines = [];
-
-    if (total > 1) {
-        lines.push(`━━━ eSIM ${index + 1} of ${total} ━━━`);
-    }
-
+    if (total > 1) lines.push(`━━━ eSIM ${index + 1} of ${total} ━━━`);
     lines.push('ICCID:');
     lines.push(esim.iccid);
-
     if (esim.shortUrl) {
         lines.push('eSIM Installation:');
         lines.push(esim.shortUrl);
     }
-
     return lines.join('\n');
 }
 
-/**
- * Builds the full delivery message.
- */
 function buildDeliveryMessage(esims) {
     const blocks = esims.map((e, i) => formatEsimBlock(e, i, esims.length));
-
     const pool = esims.length === 1 ? singleTemplates : multiTemplates;
     const template = pool[Math.floor(Math.random() * pool.length)];
-
     return template
         .replace('%ESIM_LIST%', blocks.join('\n\n'))
         .replace(/%COUNT%/g, String(esims.length));

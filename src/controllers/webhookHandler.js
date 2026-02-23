@@ -4,144 +4,119 @@ const { buildDeliveryMessage } = require('../services/templates');
 const logger = require('../services/logger');
 
 /**
- * Order-Cache: Speichert Ergebnis pro Bestellung.
+ * Order cache: prevents duplicate orders and stores results.
  *
- * Schlüssel → {
+ * Key → {
  *   status: 'processing' | 'done' | 'error',
- *   result: string | null,       // die Deliverable-Nachricht (nur bei 'done')
- *   orderNo: string | null,      // eSIMAccess orderNo (zum Nachverfolgen)
+ *   result: string | null,    // deliverable text (only when 'done')
  *   timestamp: number
  * }
  *
- * REGELN:
- * - 'processing' → 500 an Sellauth (NICHT als geliefert markieren)
- * - 'done'       → gecachtes Ergebnis nochmal senden (200)
- * - 'error'      → 500 an Sellauth, NICHT nochmal bestellen (eSIM wurde ja schon gekauft!)
+ * RULES:
+ * - 'processing' → 500 to Sellauth (don't mark as delivered)
+ * - 'done'       → send cached result again (200)
+ * - 'error'      → 500, do NOT re-order (eSIM was already purchased!)
  */
 const orderCache = new Map();
-const CACHE_TTL = 2 * 60 * 60 * 1000; // 2 Stunden
 
 setInterval(() => {
-    const now = Date.now();
-    for (const [key, entry] of orderCache) {
-        if (now - entry.timestamp > CACHE_TTL) orderCache.delete(key);
+    const cutoff = Date.now() - 2 * 60 * 60 * 1000; // 2h TTL
+    for (const [k, v] of orderCache) {
+        if (v.timestamp < cutoff) orderCache.delete(k);
     }
 }, 10 * 60 * 1000);
 
 function getOrderKey(req) {
-    const body = req.body;
-    if (body?.invoice_id) return `inv_${body.invoice_id}`;
-    if (body?.id) return `id_${body.id}`;
-
+    if (req.body?.invoice_id) return `inv_${req.body.invoice_id}`;
+    if (req.body?.id) return `id_${req.body.id}`;
     const crypto = require('crypto');
-    const hash = crypto.createHash('sha256')
-        .update(req.rawBody || JSON.stringify(body))
-        .digest('hex')
-        .substring(0, 16);
-    return `hash_${hash}`;
+    return `hash_${crypto.createHash('sha256').update(req.rawBody || JSON.stringify(req.body)).digest('hex').substring(0, 16)}`;
 }
 
 /**
- * Sellauth Dynamic Delivery Webhook.
+ * SPEED-OPTIMIZED Webhook Handler
  *
- * KRITISCH:
- * - 200 + text = Sellauth zeigt das als Deliverable → NUR mit echten eSIM-Daten!
- * - 500 = Sellauth markiert als fehlgeschlagen → sicher bei Fehlern
- * - NIEMALS doppelt bestellen, auch nicht bei Retry von Sellauth
+ * Critical path (blocks response):
+ *   signature check → cache check → order eSIM → poll → build message → send 200
+ *
+ * Deferred (AFTER response sent):
+ *   logging, stats recording, cache update
+ *
+ * This means the customer gets their eSIM data as fast as physically possible.
  */
 async function handleWebhook(req, res) {
-    const startTime = Date.now();
+    const t0 = Date.now();
     const packageCode = req.query.packageCode;
     const quantity = parseInt(req.body?.item?.quantity, 10) || 1;
     const orderId = req.body?.invoice_id || req.body?.id || 'unknown';
-
-    if (!packageCode) {
-        return res.status(400).json({ error: 'Missing packageCode' });
-    }
-    if (quantity < 1 || quantity > 10) {
-        return res.status(400).json({ error: 'Invalid quantity' });
-    }
-
     const orderKey = getOrderKey(req);
+
+    // ─── Validate (fast, no I/O) ───
+    if (!packageCode) return res.status(400).json({ error: 'Missing packageCode' });
+    if (quantity < 1 || quantity > 10) return res.status(400).json({ error: 'Invalid quantity' });
+
+    // ─── Duplicate check (fast, in-memory) ───
     const cached = orderCache.get(orderKey);
-
-    // ─── Duplikat-Prüfung ───
     if (cached) {
-        switch (cached.status) {
-            case 'done':
-                // Ergebnis existiert → nochmal liefern
-                logger.info('Duplikat: Sende gecachtes Ergebnis', { orderId, orderKey });
-                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-                return res.status(200).send(cached.result);
-
-            case 'processing':
-                // Läuft noch → 500 damit Sellauth NICHT als Lieferung wertet
-                logger.warn('Duplikat: Noch in Bearbeitung', { orderId, orderKey });
-                return res.status(500).json({ error: 'Still processing' });
-
-            case 'error':
-                // Fehler war → NICHT nochmal bestellen! eSIM wurde bereits gekauft.
-                // 500 zurück, Admin muss manuell eingreifen.
-                logger.warn('Duplikat: Vorheriger Versuch fehlgeschlagen, keine Neubestellung', {
-                    orderId, orderKey,
-                });
-                return res.status(500).json({ error: 'Previous attempt failed. Manual intervention needed.' });
+        if (cached.status === 'done') {
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.status(200).send(cached.result);
+            // Deferred log
+            setImmediate(() => logger.info('Duplicate: sent cached result', { orderId, orderKey }));
+            return;
         }
+        if (cached.status === 'processing') {
+            return res.status(500).json({ error: 'Still processing' });
+        }
+        // status === 'error': don't re-order
+        return res.status(500).json({ error: 'Previous attempt failed. Manual intervention needed.' });
     }
 
-    // ─── Neue Bestellung ───
-    orderCache.set(orderKey, {
-        status: 'processing',
-        result: null,
-        orderNo: null,
-        timestamp: Date.now(),
-    });
-
-    logger.info('Webhook → Starte Bestellung', { orderId, packageCode, quantity, orderKey });
+    // ─── Mark as processing ───
+    orderCache.set(orderKey, { status: 'processing', result: null, timestamp: Date.now() });
 
     try {
+        // ─── Order + Poll (this is the unavoidable wait) ───
         const esims = await esimService.orderESims(packageCode, quantity);
 
         if (!esims || esims.length === 0) {
-            throw new Error('Keine eSIM-Daten erhalten');
+            throw new Error('No eSIM data received');
         }
 
+        // ─── Build message (fast, in-memory) ───
         const deliveryMessage = buildDeliveryMessage(esims);
 
-        // Cache mit Ergebnis aktualisieren
-        orderCache.set(orderKey, {
-            status: 'done',
-            result: deliveryMessage,
-            orderNo: null,
-            timestamp: Date.now(),
-        });
-
-        statsService.recordOrder(esims.length);
-
-        const dur = ((Date.now() - startTime) / 1000).toFixed(1);
-        logger.info(`Lieferung OK in ${dur}s`, {
-            orderId, esimCount: esims.length,
-            iccids: esims.map(e => e.iccid),
-        });
-
+        // ─── SEND RESPONSE FIRST — customer gets data NOW ───
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        return res.status(200).send(deliveryMessage);
+        res.status(200).send(deliveryMessage);
+
+        // ─── Everything below runs AFTER the response is sent ───
+        setImmediate(() => {
+            // Update cache
+            orderCache.set(orderKey, { status: 'done', result: deliveryMessage, timestamp: Date.now() });
+
+            // Record stats (async disk write, never blocks)
+            statsService.recordOrder(esims.length);
+
+            // Log success
+            const dur = ((Date.now() - t0) / 1000).toFixed(1);
+            logger.info(`Delivered ${esims.length} eSIM(s) in ${dur}s`, {
+                orderId,
+                packageCode,
+                iccids: esims.map(e => e.iccid),
+            });
+        });
 
     } catch (error) {
-        const dur = ((Date.now() - startTime) / 1000).toFixed(1);
-        logger.error(`Fehler nach ${dur}s`, { orderId, packageCode, error: error.message });
+        // Error: send 500 first, then log
+        res.status(500).json({ error: 'Provisioning failed', message: error.message });
 
-        statsService.recordError();
-
-        // NICHT löschen! Verhindert Doppelbestellung bei Retry.
-        orderCache.set(orderKey, {
-            status: 'error',
-            result: null,
-            orderNo: null,
-            timestamp: Date.now(),
+        setImmediate(() => {
+            orderCache.set(orderKey, { status: 'error', result: null, timestamp: Date.now() });
+            statsService.recordError();
+            const dur = ((Date.now() - t0) / 1000).toFixed(1);
+            logger.error(`Failed after ${dur}s`, { orderId, packageCode, error: error.message });
         });
-
-        return res.status(500).json({ error: 'Provisioning failed', message: error.message });
     }
 }
 

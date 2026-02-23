@@ -1,96 +1,45 @@
 const fs = require('fs');
 const path = require('path');
-const logger = require('./logger');
 
 const dataDir = path.join(__dirname, '../../data');
 const statsPath = path.join(dataDir, 'stats.json');
 
-// ─── In-Memory Cache ───
-let statsCache = null;
+// ─── Pure in-memory stats, async flush to disk ───
+let stats = { totalOrders: 0, totalEsims: 0, lastOrderAt: null, errors: 0 };
+let dirty = false;
 
-/**
- * Erstellt die Datendatei, falls sie nicht existiert.
- */
-function ensureDataFile() {
-    try {
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
-        if (!fs.existsSync(statsPath)) {
-            const initial = {
-                totalOrders: 0,
-                totalEsims: 0,
-                lastOrderAt: null,
-                errors: 0,
-            };
-            fs.writeFileSync(statsPath, JSON.stringify(initial, null, 2));
-            statsCache = initial;
-        }
-    } catch (err) {
-        logger.error('Fehler beim Erstellen der Stats-Datei', { error: err.message });
+// Load from disk on startup
+try {
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+    if (fs.existsSync(statsPath)) {
+        stats = JSON.parse(fs.readFileSync(statsPath, 'utf8'));
     }
-}
+} catch (_) { /* start fresh */ }
 
-/**
- * Lädt die Stats aus der Datei (oder Cache).
- */
-function loadStats() {
-    if (statsCache) return statsCache;
+// Flush to disk every 10s if changed — NEVER blocks request handling
+setInterval(() => {
+    if (!dirty) return;
+    dirty = false;
+    fs.writeFile(statsPath, JSON.stringify(stats, null, 2), () => {});
+}, 10000);
 
-    ensureDataFile();
-    try {
-        const raw = fs.readFileSync(statsPath, 'utf8');
-        statsCache = JSON.parse(raw);
-        return statsCache;
-    } catch (err) {
-        logger.error('Fehler beim Lesen der Stats-Datei', { error: err.message });
-        return { totalOrders: 0, totalEsims: 0, lastOrderAt: null, errors: 0 };
-    }
-}
+// Also flush on shutdown
+process.on('beforeExit', () => {
+    if (dirty) fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
+});
 
-/**
- * Speichert die Stats in die Datei und aktualisiert den Cache.
- */
-function saveStats(stats) {
-    try {
-        statsCache = stats;
-        fs.writeFileSync(statsPath, JSON.stringify(stats, null, 2));
-    } catch (err) {
-        logger.error('Fehler beim Speichern der Stats-Datei', { error: err.message });
-    }
-}
-
-const statsService = {
-    /**
-     * Registriert eine erfolgreiche Bestellung.
-     * @param {number} esimCount - Anzahl der gelieferten eSIMs
-     */
+module.exports = {
     recordOrder(esimCount = 1) {
-        const stats = loadStats();
-        stats.totalOrders = (stats.totalOrders || 0) + 1;
-        stats.totalEsims = (stats.totalEsims || 0) + esimCount;
+        stats.totalOrders++;
+        stats.totalEsims += esimCount;
         stats.lastOrderAt = new Date().toISOString();
-        saveStats(stats);
+        dirty = true;
     },
-
-    /**
-     * Registriert einen Fehler.
-     */
     recordError() {
-        const stats = loadStats();
-        stats.errors = (stats.errors || 0) + 1;
-        saveStats(stats);
+        stats.errors++;
+        dirty = true;
     },
-
-    /**
-     * Gibt alle Stats zurück.
-     */
     getStats() {
-        return loadStats();
+        return { ...stats };
     },
 };
-
-// Initial laden
-ensureDataFile();
-
-module.exports = statsService;
