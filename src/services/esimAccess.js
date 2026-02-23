@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const config = require('../config');
 const logger = require('./logger');
 
-const BASE_URL = 'https://api.esimaccess.com/v1/open';
+const BASE_URL = 'https://api.esimaccess.com/api/v1/open';
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
