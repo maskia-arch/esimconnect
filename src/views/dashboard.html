@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eSIM Bot Admin</title>
+    <style>
+        body { font-family: system-ui, sans-serif; padding: 20px; background: #f4f4f4; color: #333; max-width: 600px; margin: 0 auto; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        code { display: block; background: #2d2d2d; color: #4af626; padding: 10px; border-radius: 4px; word-wrap: break-word; }
+    </style>
+</head>
+<body>
+    <h2>🛡️ eSIM Bot Admin</h2>
+    
+    <div class="card">
+        <h3>📊 Status</h3>
+        <p><b>Gesamtbestellungen:</b> {{TOTAL_ORDERS}}</p>
+        <p><b>System Uptime:</b> {{UPTIME}} (Online)</p>
+    </div>
+
+    <div class="card">
+        <h3>🔗 Link-Baukasten</h3>
+        <p>Trage den Package Code von eSIMAccess ein, um die Sellauth URL zu generieren:</p>
+        <input type="text" id="pc" placeholder="z.B. CKH993" oninput="updateLink()">
+        <p>Kopiere diesen Link in Sellauth (Dynamic Delivery URL):</p>
+        <code id="out">...</code>
+    </div>
+
+    <script>
+        function updateLink() {
+            const code = document.getElementById('pc').value.trim();
+            const baseUrl = window.location.origin + '/webhook?packageCode=';
+            const outObj = document.getElementById('out');
+            if(code) {
+                outObj.innerText = baseUrl + code;
+            } else {
+                outObj.innerText = '...';
+            }
+        }
+    </script>
+</body>
+</html>
