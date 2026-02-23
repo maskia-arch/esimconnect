@@ -52,14 +52,19 @@ async function orderESims(packageCode, count = 1) {
     // ─── Schritt 1: Bestellung aufgeben ───
     let orderNo;
     try {
-        const orderResponse = await axios.post(`${BASE_URL}/package/order`, {
-            packageCode,
-            count,
-            transactionId,
-        }, {
-            headers,
-            timeout: 30000,
-        });
+const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
+    transactionId: transactionId,
+    packageInfoList: [
+        {
+            packageCode: packageCode,
+            count: count
+        }
+    ]
+}, {
+    headers,
+    timeout: 30000,
+});
+
 
         const orderData = orderResponse.data;
 
