@@ -3,41 +3,194 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>eSIM Bot Admin</title>
+    <title>eSIM Bot Admin — {{VERSION}}</title>
     <style>
-        body { font-family: system-ui, sans-serif; padding: 20px; background: #f4f4f4; color: #333; max-width: 600px; margin: 0 auto; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-        code { display: block; background: #2d2d2d; color: #4af626; padding: 10px; border-radius: 4px; word-wrap: break-word; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            padding: 20px;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            max-width: 640px;
+            margin: 0 auto;
+        }
+        h2 { margin-bottom: 20px; color: #fff; font-size: 1.4em; }
+        .card {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #2a2a2a;
+            margin-bottom: 16px;
+        }
+        .card h3 { margin-bottom: 12px; color: #fff; font-size: 1.05em; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .stat-item {
+            background: #222;
+            padding: 14px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: 700;
+            color: #4af626;
+            display: block;
+        }
+        .stat-value.warn { color: #f6a623; }
+        .stat-label {
+            font-size: 0.8em;
+            color: #888;
+            margin-top: 4px;
+            display: block;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #2a2a2a;
+            font-size: 0.9em;
+        }
+        .info-row:last-child { border-bottom: none; }
+        .info-label { color: #888; }
+        .info-value { color: #e0e0e0; font-weight: 500; }
+        input {
+            width: 100%;
+            padding: 10px 12px;
+            margin: 8px 0;
+            border: 1px solid #333;
+            border-radius: 6px;
+            background: #222;
+            color: #e0e0e0;
+            font-family: inherit;
+            font-size: 0.95em;
+        }
+        input:focus { outline: none; border-color: #4af626; }
+        input::placeholder { color: #666; }
+        .url-output {
+            display: block;
+            background: #111;
+            border: 1px solid #333;
+            color: #4af626;
+            padding: 10px 12px;
+            border-radius: 6px;
+            word-break: break-all;
+            font-family: 'SF Mono', 'Consolas', monospace;
+            font-size: 0.85em;
+            min-height: 40px;
+            line-height: 1.5;
+            cursor: pointer;
+            transition: border-color 0.2s;
+            user-select: all;
+        }
+        .url-output:hover { border-color: #4af626; }
+        .url-output.empty { color: #555; cursor: default; }
+        .hint { font-size: 0.8em; color: #666; margin-top: 4px; }
+        .copy-toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #4af626;
+            color: #000;
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.9em;
+            transition: transform 0.3s ease;
+            pointer-events: none;
+        }
+        .copy-toast.show { transform: translateX(-50%) translateY(0); }
     </style>
 </head>
 <body>
     <h2>🛡️ eSIM Bot Admin</h2>
-    
+
     <div class="card">
-        <h3>📊 Status</h3>
-        <p><b>Gesamtbestellungen:</b> {{TOTAL_ORDERS}}</p>
-        <p><b>System Uptime:</b> {{UPTIME}} (Online)</p>
+        <h3>📊 Statistiken</h3>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <span class="stat-value">{{TOTAL_ORDERS}}</span>
+                <span class="stat-label">Bestellungen</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value">{{TOTAL_ESIMS}}</span>
+                <span class="stat-label">eSIMs geliefert</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value warn">{{ERRORS}}</span>
+                <span class="stat-label">Fehler</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-value" style="font-size:1em; color:#e0e0e0">{{LAST_ORDER}}</span>
+                <span class="stat-label">Letzte Bestellung</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>⚙️ System</h3>
+        <div class="info-row">
+            <span class="info-label">Version</span>
+            <span class="info-value">{{VERSION}}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">Uptime</span>
+            <span class="info-value">{{UPTIME}}</span>
+        </div>
+        <div class="info-row">
+            <span class="info-label">RAM</span>
+            <span class="info-value">{{MEMORY}} MB</span>
+        </div>
     </div>
 
     <div class="card">
         <h3>🔗 Link-Baukasten</h3>
-        <p>Trage den Package Code von eSIMAccess ein, um die Sellauth URL zu generieren:</p>
-        <input type="text" id="pc" placeholder="z.B. CKH993" oninput="updateLink()">
-        <p>Kopiere diesen Link in Sellauth (Dynamic Delivery URL):</p>
-        <code id="out">...</code>
+        <p style="font-size: 0.9em; color: #aaa; margin-bottom: 8px;">
+            Trage den Package Code von eSIMAccess ein, um die Sellauth Dynamic Delivery URL zu generieren:
+        </p>
+        <input type="text" id="pc" placeholder="z.B. CKH993" oninput="updateLink()" autocomplete="off" spellcheck="false">
+        <p style="font-size: 0.9em; color: #aaa; margin: 8px 0 4px;">
+            Kopiere diesen Link als <strong>Dynamic URL</strong> in die Sellauth Produkt-Variante:
+        </p>
+        <code class="url-output empty" id="out" onclick="copyUrl()">Package Code eingeben...</code>
+        <p class="hint">Klick zum Kopieren</p>
     </div>
+
+    <div id="toast" class="copy-toast">✅ Kopiert!</div>
 
     <script>
         function updateLink() {
             const code = document.getElementById('pc').value.trim();
-            const baseUrl = window.location.origin + '/webhook?packageCode=';
-            const outObj = document.getElementById('out');
-            if(code) {
-                outObj.innerText = baseUrl + code;
+            const out = document.getElementById('out');
+            if (code) {
+                out.textContent = window.location.origin + '/webhook?packageCode=' + encodeURIComponent(code);
+                out.classList.remove('empty');
             } else {
-                outObj.innerText = '...';
+                out.textContent = 'Package Code eingeben...';
+                out.classList.add('empty');
             }
+        }
+
+        function copyUrl() {
+            const out = document.getElementById('out');
+            if (out.classList.contains('empty')) return;
+
+            navigator.clipboard.writeText(out.textContent).then(() => {
+                const toast = document.getElementById('toast');
+                toast.classList.add('show');
+                setTimeout(() => toast.classList.remove('show'), 1500);
+            }).catch(() => {
+                // Fallback
+                const range = document.createRange();
+                range.selectNodeContents(out);
+                window.getSelection().removeAllRanges();
+                window.getSelection().addRange(range);
+                document.execCommand('copy');
+            });
         }
     </script>
 </body>

@@ -1,47 +1,152 @@
 const esimService = require('../services/esimAccess');
 const statsService = require('../services/statsService');
+const { buildDeliveryMessage } = require('../services/templates');
+const logger = require('../services/logger');
 
-const templates = [
-    "Hallo! Deine Bestellung ist einsatzbereit. Hier sind deine Daten:\n\n%ESIM_LIST%\n\nKurzanleitung:\n1. Kopiere die URL und öffne sie im Browser (dort findest du den QR-Code & Quick-Install für iOS/Android).\n2. WICHTIG: Bitte aktiviere nach der Installation das Datenroaming, sonst hast du kein Internet!",
-    "Vielen Dank für deinen Einkauf! Deine eSIMs wurden erfolgreich erstellt:\n\n%ESIM_LIST%\n\nSo geht's:\n1. Kopiere die URL in deinen Browser für den Installations-QR-Code oder die 1-Klick-Einrichtung.\n2. WICHTIG: Datenroaming in den Einstellungen aktivieren!",
-    "Hey! Deine Bestellung war erfolgreich. Hier ist deine Lieferung:\n\n%ESIM_LIST%\n\nBitte beachten:\n1. URL im Browser öffnen, um zur eSIM-Übersicht (QR-Code / Quick-Install) zu gelangen.\n2. WICHTIG: Aktiviere unbedingt das Datenroaming für diese eSIM.",
-    "Großartig, deine Lieferung ist da! Hier findest du alle nötigen Details:\n\n%ESIM_LIST%\n\nInstallation:\n1. Öffne die URL im Browser, um den QR-Code oder iOS/Android Quick-Install zu sehen.\n2. WICHTIG: Ohne aktiviertes Datenroaming funktioniert die Verbindung nicht!",
-    "Danke für dein Vertrauen! Deine eSIM-Daten sind ab sofort verfügbar:\n\n%ESIM_LIST%\n\nWichtig für die Einrichtung:\n1. Link im Browser aufrufen für die einfache Installation (QR / Quick-Install).\n2. WICHTIG: Datenroaming muss nach der Installation eingeschaltet werden.",
-    "Hallo zurück! Deine Bestellung wurde soeben frisch generiert:\n\n%ESIM_LIST%\n\nErste Schritte:\n1. URL kopieren und im Browser öffnen (QR-Code & Quick-Install warten dort).\n2. WICHTIG: Bitte vergiss nicht, das Datenroaming zu aktivieren!",
-    "Perfekt, alles hat geklappt! Deine eSIMs warten auf ihren Einsatz:\n\n%ESIM_LIST%\n\nAnleitung:\n1. Den Link im Browser öffnen, um die Installation (iOS/Android Quick-Install oder QR) zu starten.\n2. WICHTIG: Aktiviere danach sofort das Datenroaming.",
-    "Deine eSIM-Bestellung ist abgeschlossen. Hier sind deine Zugangsdaten:\n\n%ESIM_LIST%\n\nZur Aktivierung:\n1. URL im Browser starten, um zur eSIM-Übersicht inkl. QR-Code zu gelangen.\n2. WICHTIG: Schalte das Datenroaming in deinen Einstellungen ein!",
-    "Juhu, bereit für die Reise! Hier sind die Details zu deiner Bestellung:\n\n%ESIM_LIST%\n\nSo installierst du sie:\n1. Kopiere die URL und öffne sie im Browser für den Quick-Install.\n2. WICHTIG: Damit du surfen kannst, muss das Datenroaming aktiv sein.",
-    "Herzlichen Glückwunsch zur neuen eSIM! Hier sind deine Aktivierungsdaten:\n\n%ESIM_LIST%\n\nHinweis zur Nutzung:\n1. Öffne den Link im Webbrowser für alle Installations-Optionen (QR / 1-Klick).\n2. WICHTIG: Aktiviere unbedingt das Datenroaming in deinem Gerät."
-];
+// ─── Duplikat-Schutz (In-Memory) ───
+// Verhindert dass dieselbe Bestellung doppelt verarbeitet wird,
+// falls Sellauth den Webhook erneut sendet.
+const processingOrders = new Map();
+const ORDER_TTL = 30 * 60 * 1000; // 30 Minuten
 
+/**
+ * Bereinigt abgelaufene Einträge aus dem Processing-Cache.
+ */
+function cleanupProcessingCache() {
+    const now = Date.now();
+    for (const [key, timestamp] of processingOrders) {
+        if (now - timestamp > ORDER_TTL) {
+            processingOrders.delete(key);
+        }
+    }
+}
+
+// Alle 5 Minuten aufräumen
+setInterval(cleanupProcessingCache, 5 * 60 * 1000);
+
+/**
+ * Erstellt einen eindeutigen Schlüssel für die Bestellung.
+ * Basiert auf Invoice-ID (wenn vorhanden) oder einem Hash des Body.
+ */
+function getOrderKey(req) {
+    const body = req.body;
+
+    // Sellauth sendet Invoice-ID im Body
+    if (body?.invoice_id) return `inv_${body.invoice_id}`;
+    if (body?.id) return `id_${body.id}`;
+
+    // Fallback: Hash des gesamten Body
+    const crypto = require('crypto');
+    const hash = crypto.createHash('sha256')
+        .update(req.rawBody || JSON.stringify(body))
+        .digest('hex')
+        .substring(0, 16);
+    return `hash_${hash}`;
+}
+
+/**
+ * Sellauth Dynamic Delivery Webhook Handler.
+ * 
+ * Flow:
+ * 1. Sellauth sendet POST an /webhook?packageCode=XXX nach erfolgreicher Bezahlung
+ * 2. Wir bestellen die eSIM(s) bei eSIMAccess
+ * 3. Wir pollen die eSIMAccess API bis die eSIM-Profile bereit sind
+ * 4. Wir antworten Sellauth mit den eSIM-Daten als plain text
+ * 5. Sellauth leitet die Antwort an den Kunden weiter
+ * 
+ * WICHTIG: Sellauth erwartet eine schnelle Antwort (< 30s default).
+ * Da eSIMAccess bis zu 10+ Minuten brauchen kann, muss der Server
+ * keep-alive / lange Timeouts unterstützen. Alternativ: server.timeout = 0.
+ */
 async function handleWebhook(req, res) {
+    const startTime = Date.now();
     const packageCode = req.query.packageCode;
-    const quantity = req.body?.item?.quantity || 1;
+    const quantity = parseInt(req.body?.item?.quantity, 10) || 1;
+    const orderId = req.body?.invoice_id || req.body?.id || 'unknown';
 
+    // ─── Validierung ───
     if (!packageCode) {
-        return res.status(400).send("Missing packageCode");
+        logger.warn('Webhook ohne packageCode empfangen', {
+            orderId,
+            query: req.query,
+        });
+        return res.status(400).json({ error: 'Missing packageCode query parameter' });
     }
 
-    try {
-        let esimBlocks = [];
+    if (quantity < 1 || quantity > 10) {
+        logger.warn('Ungültige Menge', { orderId, quantity });
+        return res.status(400).json({ error: 'Invalid quantity (1-10)' });
+    }
 
-        for (let i = 0; i < quantity; i++) {
-            const activationData = await esimService.orderESim(packageCode);
-            
-            let block = `--- eSIM ${i + 1} ---\nICCID:\n${activationData.iccid}\n\neSIM URL:\n${activationData.shortUrl}`;
-            esimBlocks.push(block);
-            
-            statsService.incrementOrders();
+    // ─── Duplikat-Schutz ───
+    const orderKey = getOrderKey(req);
+    if (processingOrders.has(orderKey)) {
+        logger.warn('Duplikat-Webhook erkannt, wird ignoriert', {
+            orderId,
+            orderKey,
+        });
+        // 200 zurückgeben damit Sellauth nicht erneut versucht
+        return res.status(200).send('Bestellung wird bereits verarbeitet. Bitte warte einen Moment.');
+    }
+    processingOrders.set(orderKey, Date.now());
+
+    logger.info(`Webhook empfangen – Starte eSIM-Bestellung`, {
+        orderId,
+        packageCode,
+        quantity,
+        orderKey,
+    });
+
+    try {
+        // ─── eSIM(s) bestellen und auf Provisionierung warten ───
+        // Bei count > 1 nutzen wir den Batch-Modus von eSIMAccess,
+        // anstatt einzelne Bestellungen aufzugeben.
+        const esims = await esimService.orderESims(packageCode, quantity);
+
+        if (!esims || esims.length === 0) {
+            throw new Error('Keine eSIM-Daten von eSIMAccess erhalten');
         }
 
-        const randomTemplate = templates[Math.floor(Math.random() * templates.length)];
-        const formattedText = randomTemplate.replace('%ESIM_LIST%', esimBlocks.join('\n\n'));
+        // ─── Liefernachricht erstellen ───
+        const deliveryMessage = buildDeliveryMessage(esims);
 
-        res.setHeader('Content-Type', 'text/plain');
-        return res.status(200).send(formattedText);
+        // ─── Stats aktualisieren ───
+        statsService.recordOrder(esims.length);
+
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        logger.info(`Bestellung erfolgreich ausgeliefert in ${duration}s`, {
+            orderId,
+            packageCode,
+            esimCount: esims.length,
+            iccids: esims.map(e => e.iccid),
+        });
+
+        // ─── Antwort an Sellauth (wird an Kunden weitergeleitet) ───
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        return res.status(200).send(deliveryMessage);
 
     } catch (error) {
-        return res.status(500).send("Error provisioning eSIM");
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        logger.error(`Bestellfehler nach ${duration}s`, {
+            orderId,
+            packageCode,
+            quantity,
+            error: error.message,
+        });
+
+        statsService.recordError();
+
+        // Duplikat-Schutz aufheben damit bei Retry verarbeitet wird
+        processingOrders.delete(orderKey);
+
+        // Sellauth erhält eine Fehlermeldung,
+        // die nicht an den Kunden weitergegeben werden sollte.
+        // Bei 500 versucht Sellauth es ggf. erneut.
+        return res.status(500).json({
+            error: 'eSIM provisioning failed',
+            message: error.message,
+        });
+
     }
 }
 
