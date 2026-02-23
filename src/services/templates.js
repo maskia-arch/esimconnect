@@ -1,107 +1,121 @@
 /**
- * English delivery templates for Sellauth eSIM delivery.
- * Each line is individually copyable in Sellauth's Deliverables view.
+ * Compact English templates for Sellauth.
+ *
+ * IMPORTANT: Sellauth's deliverables column is narrow (~35 chars).
+ * All lines must be short enough to avoid ugly word wrapping.
+ * Max ~35 characters per line for clean display.
  */
 
 const singleTemplates = [
-    `✅ Your eSIM is ready to go!
+    `✅ Your eSIM is ready!
 
 %ESIM_LIST%
 
-📲 Quick Setup:
-1. Open the installation link in your browser — you'll find the QR code & one-tap install for iOS/Android.
-2. ⚠️ IMPORTANT: Enable Data Roaming in your device settings after installation, or you won't have internet!`,
+📲 Setup:
+1. Open the link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
 
-    `🎉 Order complete! Here are your eSIM details:
-
-%ESIM_LIST%
-
-📲 How to install:
-1. Tap the link or paste it into your browser — QR code & quick setup are waiting for you.
-2. ⚠️ IMPORTANT: Turn on Data Roaming after installing the eSIM!`,
-
-    `🌍 Your eSIM has been activated — happy travels!
-
-%ESIM_LIST%
-
-📲 Getting started:
-1. Open the link in your browser → scan the QR code or use the quick install option.
-2. ⚠️ IMPORTANT: Data Roaming must be enabled for the eSIM to connect!`,
-
-    `📦 Delivery complete! Your eSIM credentials:
+    `🎉 Order complete!
 
 %ESIM_LIST%
 
 📲 Next steps:
-1. Open the installation link and follow the on-screen instructions (QR code / one-tap install).
-2. ⚠️ IMPORTANT: Don't forget to enable Data Roaming in your settings!`,
+1. Open the link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
 
-    `🚀 All set! Here's your eSIM:
-
-%ESIM_LIST%
-
-📲 Installation guide:
-1. Copy the link and open it in your browser to start the setup.
-2. ⚠️ IMPORTANT: Make sure Data Roaming is turned on so you can get online!`,
-
-    `✨ Your eSIM is live! Here are your access details:
-
-%ESIM_LIST%
-
-📲 Setup in seconds:
-1. Open the installation link — choose QR code or direct install for your device.
-2. ⚠️ IMPORTANT: Enable Data Roaming after installation to activate your connection!`,
-
-    `📬 Your order has been delivered! eSIM details below:
-
-%ESIM_LIST%
-
-📲 To activate:
-1. Open the link in any browser to access your QR code or quick install page.
-2. ⚠️ IMPORTANT: You must enable Data Roaming on your device for the eSIM to work!`,
-];
-
-const multiTemplates = [
-    `✅ Your %COUNT% eSIMs are ready to go!
-
-%ESIM_LIST%
-
-📲 Quick Setup:
-1. Open each installation link in your browser — each has its own QR code & quick install.
-2. ⚠️ IMPORTANT: Enable Data Roaming for each eSIM after installation!`,
-
-    `🎉 Order complete! Here are your %COUNT% eSIMs:
+    `🌍 eSIM activated!
 
 %ESIM_LIST%
 
 📲 How to install:
-1. Install each eSIM one by one using the links above.
-2. ⚠️ IMPORTANT: Turn on Data Roaming separately for each eSIM!`,
+1. Open the link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
 
-    `📦 Delivery complete — %COUNT% eSIMs ready for you!
-
-%ESIM_LIST%
-
-📲 Getting started:
-1. Open each link in your browser and follow the setup instructions.
-2. ⚠️ IMPORTANT: Data Roaming must be enabled for each eSIM to connect!`,
-
-    `🚀 All set! Your %COUNT% eSIMs are below:
+    `📬 eSIM delivered!
 
 %ESIM_LIST%
 
-📲 Installation guide:
-1. Set up each eSIM individually via the installation links.
-2. ⚠️ IMPORTANT: Don't forget to enable Data Roaming for every eSIM!`,
+📲 To activate:
+1. Open the link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
+
+    `🚀 All set!
+
+%ESIM_LIST%
+
+📲 Quick setup:
+1. Open the link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
+
+    `✨ eSIM is live!
+
+%ESIM_LIST%
+
+📲 Get started:
+1. Open the link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
+
+    `📦 Delivery done!
+
+%ESIM_LIST%
+
+📲 Install now:
+1. Open the link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
+];
+
+const multiTemplates = [
+    `✅ %COUNT% eSIMs ready!
+
+%ESIM_LIST%
+
+📲 Setup:
+1. Open each link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
+
+    `🎉 %COUNT% eSIMs delivered!
+
+%ESIM_LIST%
+
+📲 Next steps:
+1. Install one by one.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
+
+    `📦 %COUNT% eSIMs ready!
+
+%ESIM_LIST%
+
+📲 How to install:
+1. Open each link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
+
+    `🚀 %COUNT% eSIMs – let's go!
+
+%ESIM_LIST%
+
+📲 Quick setup:
+1. Open each link above.
+2. Scan QR or tap Install.
+3. Enable Data Roaming!`,
 ];
 
 function formatEsimBlock(esim, index, total) {
     const lines = [];
-    if (total > 1) lines.push(`━━━ eSIM ${index + 1} of ${total} ━━━`);
+    if (total > 1) lines.push(`── eSIM ${index + 1} of ${total} ──`);
     lines.push('ICCID:');
     lines.push(esim.iccid);
     if (esim.shortUrl) {
-        lines.push('eSIM Installation:');
+        lines.push('Install link:');
         lines.push(esim.shortUrl);
     }
     return lines.join('\n');
@@ -110,8 +124,8 @@ function formatEsimBlock(esim, index, total) {
 function buildDeliveryMessage(esims) {
     const blocks = esims.map((e, i) => formatEsimBlock(e, i, esims.length));
     const pool = esims.length === 1 ? singleTemplates : multiTemplates;
-    const template = pool[Math.floor(Math.random() * pool.length)];
-    return template
+    const tpl = pool[Math.floor(Math.random() * pool.length)];
+    return tpl
         .replace('%ESIM_LIST%', blocks.join('\n\n'))
         .replace(/%COUNT%/g, String(esims.length));
 }
