@@ -27,14 +27,20 @@ function generateTransactionId() {
 
 /**
  * Bestellt eSIMs bei eSIMAccess.
- * 
- * eSIMAccess API Flow:
- * 1. POST /package/order → Bestellung aufgeben (gibt orderNo zurück)
- * 2. POST /esim/query   → Polling nach eSIM-Daten (ICCID, shortUrl)
- * 
- * Die eSIM-Provisionierung durch den SM-DP+ Server braucht Zeit,
- * daher wird in einem Polling-Loop alle X Sekunden nachgefragt.
- * 
+ *
+ * eSIMAccess API Flow (laut Doku):
+ * 1. POST /esim/order  → Bestellung aufgeben
+ *    Body: { transactionId, packageInfoList: [{ packageCode, count }] }
+ *    Response: { success, obj: { orderNo, transactionId } }
+ *
+ * 2. POST /esim/query  → Polling nach eSIM-Profilen
+ *    Body: { orderNo } (bevorzugt) oder { transactionId }
+ *    Response: { success, obj: { esimList: [{ iccid, shortUrl, ... }] } }
+ *    
+ *    HINWEIS: Wenn Profile noch nicht bereit → errorCode "200010"
+ *    ("SM-DP+ is still allocating profiles for the order")
+ *    Expect wait times of up to 30 seconds. Max 30 eSIMs in one batch.
+ *
  * @param {string} packageCode - Der eSIMAccess Package-Code (z.B. "CKH993")
  * @param {number} count       - Anzahl der zu bestellenden eSIMs (Standard: 1)
  * @returns {Promise<Array>}   - Array mit eSIM-Objekten { iccid, shortUrl }
@@ -43,28 +49,25 @@ async function orderESims(packageCode, count = 1) {
     const transactionId = generateTransactionId();
     const headers = getHeaders();
 
-    logger.info(`eSIM-Bestellung wird aufgegeben`, {
-        transactionId,
-        packageCode,
-        count,
+    logger.info('eSIM-Bestellung wird aufgegeben', {
+        transactionId, packageCode, count,
     });
 
     // ─── Schritt 1: Bestellung aufgeben ───
     let orderNo;
     try {
-const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
-    transactionId: transactionId,
-    packageInfoList: [
-        {
-            packageCode: packageCode,
-            count: count
-        }
-    ]
-}, {
-    headers,
-    timeout: 30000,
-});
-
+        const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
+            transactionId: transactionId,
+            packageInfoList: [
+                {
+                    packageCode: packageCode,
+                    count: count,
+                }
+            ]
+        }, {
+            headers,
+            timeout: 30000,
+        });
 
         const orderData = orderResponse.data;
 
@@ -75,12 +78,12 @@ const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
         }
 
         orderNo = orderData.obj?.orderNo || orderData.orderNo;
-        logger.info(`Bestellung aufgegeben`, { transactionId, orderNo });
+        logger.info('Bestellung aufgegeben', { transactionId, orderNo });
 
     } catch (error) {
         if (error.response) {
             const errData = error.response.data;
-            logger.error(`eSIMAccess API Fehler bei Bestellung`, {
+            logger.error('eSIMAccess API Fehler bei Bestellung', {
                 transactionId,
                 status: error.response.status,
                 errorCode: errData?.errorCode,
@@ -90,9 +93,8 @@ const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
                 `eSIMAccess Bestellfehler: ${errData?.errorMsg || error.message}`
             );
         }
-        logger.error(`Netzwerkfehler bei eSIMAccess Bestellung`, {
-            transactionId,
-            error: error.message,
+        logger.error('Netzwerkfehler bei eSIMAccess Bestellung', {
+            transactionId, error: error.message,
         });
         throw error;
     }
@@ -123,21 +125,23 @@ const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
 
             // Prüfe ob die Antwort erfolgreich ist
             if (!queryData.success && queryData.errorCode) {
-                // Bestimmte Fehlercodes bedeuten "noch nicht fertig"
-                if (queryData.errorCode === 'ORDER_IN_PROGRESS' ||
-                    queryData.errorCode === 'PROFILE_NOT_READY') {
+                // Bekannte "noch nicht fertig" Fehlercodes:
+                // 200010 = SM-DP+ is still allocating profiles (laut Doku)
+                const retryableCodes = ['200010', 'ORDER_IN_PROGRESS', 'PROFILE_NOT_READY'];
+
+                if (retryableCodes.includes(String(queryData.errorCode))) {
                     logger.debug(`eSIM noch nicht bereit (Versuch ${attempts}/${maxAttempts})`, {
-                        transactionId,
-                        errorCode: queryData.errorCode,
+                        transactionId, errorCode: queryData.errorCode,
                     });
                     continue;
                 }
+
                 throw new Error(
                     `eSIMAccess Query-Fehler: [${queryData.errorCode}] ${queryData.errorMsg || ''}`
                 );
             }
 
-            // eSIM-Liste extrahieren (verschiedene API-Antwortformate)
+            // eSIM-Liste extrahieren
             const esimList = queryData.obj?.esimList
                 || queryData.obj?.cards
                 || (Array.isArray(queryData.obj) ? queryData.obj : null);
@@ -166,14 +170,12 @@ const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
             }));
 
             logger.info(`${result.length} eSIM(s) erfolgreich provisioniert`, {
-                transactionId,
-                iccids: result.map(e => e.iccid),
+                transactionId, iccids: result.map(e => e.iccid),
             });
 
             return result;
 
         } catch (error) {
-            // Bei Netzwerk-Timeouts weiter pollen
             if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
                 logger.warn(`Query-Timeout (Versuch ${attempts}/${maxAttempts})`, {
                     transactionId,
@@ -181,25 +183,19 @@ const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
                 continue;
             }
 
-            // Andere Fehler nur loggen und weiter versuchen,
-            // es sei denn es ist ein definitiver API-Fehler
             if (error.response?.status >= 400 && error.response?.status < 500) {
                 throw error;
             }
 
             logger.warn(`Query-Fehler (Versuch ${attempts}/${maxAttempts})`, {
-                transactionId,
-                error: error.message,
+                transactionId, error: error.message,
             });
         }
     }
 
-    // Timeout erreicht
     const timeoutSec = (maxAttempts * pollInterval / 1000).toFixed(0);
     logger.error(`eSIM-Provisionierung Timeout nach ${timeoutSec}s`, {
-        transactionId,
-        orderNo,
-        attempts: maxAttempts,
+        transactionId, orderNo, attempts: maxAttempts,
     });
     throw new Error(
         `eSIM-Provisionierung Timeout: Nach ${timeoutSec} Sekunden keine eSIM-Daten erhalten.`
@@ -208,7 +204,6 @@ const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
 
 /**
  * Prüft das Guthaben des eSIMAccess-Accounts.
- * @returns {Promise<{balance: number, currencyCode: string}>}
  */
 async function getBalance() {
     try {
