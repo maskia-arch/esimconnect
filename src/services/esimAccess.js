@@ -21,14 +21,18 @@ function generateTransactionId() {
 /**
  * Bestellt eSIMs bei eSIMAccess und pollt bis die Profile bereit sind.
  *
- * Order: POST /esim/order
- *   Body: { transactionId, packageInfoList: [{ packageCode, count }] }
- *   Response: { success: true, obj: { orderNo: "B23..." } }
+ * === ORDER ===
+ * POST /esim/order
+ * Body: { transactionId, packageInfoList: [{ packageCode, count }] }
+ * Response: { success: true, obj: { orderNo: "B23..." } }
  *
- * Query: POST /esim/query
- *   Body: { orderNo: "B23..." }
- *   Wenn noch nicht fertig: { success: false, errorCode: "200010", errorMsg: "..." }
- *   Wenn fertig: { success: true, obj: { esimList: [{ iccid, shortUrl, ... }] } }
+ * === QUERY ===
+ * POST /esim/query
+ * Body: { orderNo: "B23...", pager: { pageSize: 10, pageNum: 1 } }
+ *                             ^^^^^ MANDATORY laut API-Doku!
+ *
+ * Wenn noch nicht fertig: errorCode "200010" = "Profile is being downloaded for the order"
+ * Wenn fertig: { success: true, obj: { esimList: [...], pager: {...} } }
  */
 async function orderESims(packageCode, count = 1) {
     const transactionId = generateTransactionId();
@@ -40,164 +44,124 @@ async function orderESims(packageCode, count = 1) {
     let orderNo;
     try {
         const orderResponse = await axios.post(`${BASE_URL}/esim/order`, {
-            transactionId: transactionId,
+            transactionId,
             packageInfoList: [{
-                packageCode: packageCode,
-                count: count,
+                packageCode,
+                count,
             }]
         }, { headers, timeout: 30000 });
 
-        const orderData = orderResponse.data;
+        const od = orderResponse.data;
 
-        logger.info('Order-Response erhalten', {
+        logger.info('Order-Response', {
             transactionId,
-            success: orderData.success,
-            errorCode: orderData.errorCode || null,
-            objStr: JSON.stringify(orderData.obj || null),
+            success: od.success,
+            errorCode: od.errorCode || 'null',
+            orderNo: od.obj?.orderNo || 'N/A',
         });
 
-        if (orderData.success === false && orderData.errorCode) {
-            throw new Error(`eSIMAccess Bestellfehler: [${orderData.errorCode}] ${orderData.errorMsg || 'Unbekannter Fehler'}`);
+        if (od.success === false || od.errorCode) {
+            throw new Error(`Bestellfehler: [${od.errorCode}] ${od.errorMsg || od.errorMessage || 'Unbekannt'}`);
         }
 
-        orderNo = orderData.obj?.orderNo;
+        orderNo = od.obj?.orderNo;
         if (!orderNo) {
-            logger.warn('Keine orderNo in Response', {
-                transactionId,
-                fullResponse: JSON.stringify(orderData),
-            });
-        } else {
-            logger.info('Bestellung aufgegeben', { transactionId, orderNo });
+            throw new Error(`Keine orderNo erhalten. Response: ${JSON.stringify(od)}`);
         }
 
     } catch (error) {
         if (error.response) {
-            const errData = error.response.data;
-            logger.error('eSIMAccess API Fehler bei Bestellung', {
+            logger.error('eSIMAccess Order HTTP-Fehler', {
                 transactionId,
                 status: error.response.status,
-                responseBody: JSON.stringify(errData),
+                body: JSON.stringify(error.response.data),
             });
-            throw new Error(`eSIMAccess Bestellfehler: ${errData?.errorMsg || errData?.errorMessage || error.message}`);
+            throw new Error(`Bestellfehler: ${error.response.data?.errorMsg || error.message}`);
         }
-        logger.error('Netzwerkfehler bei eSIMAccess Bestellung', { transactionId, error: error.message });
         throw error;
     }
 
     // ─── Schritt 2: Polling nach eSIM-Profilen ───
-    const queryBody = orderNo
-        ? { orderNo: orderNo }
-        : { transactionId: transactionId };
-
     let attempts = 0;
     const maxAttempts = config.esimMaxPollAttempts;
     const pollInterval = config.esimPollInterval;
 
-    logger.info('Starte Polling', {
-        transactionId,
-        orderNo: orderNo || 'N/A',
-        queryBodyStr: JSON.stringify(queryBody),
-        maxAttempts,
-        pollInterval,
-    });
+    logger.info('Starte Polling', { transactionId, orderNo, maxAttempts, pollInterval });
 
     while (attempts < maxAttempts) {
         await sleep(pollInterval);
         attempts++;
 
         try {
-            const queryResponse = await axios.post(`${BASE_URL}/esim/query`, queryBody, {
-                headers,
-                timeout: 15000,
-            });
+            const qr = await axios.post(`${BASE_URL}/esim/query`, {
+                orderNo,
+                pager: {
+                    pageSize: 10,
+                    pageNum: 1,
+                },
+            }, { headers, timeout: 15000 });
 
-            const qd = queryResponse.data;
+            const qd = qr.data;
+            const errCode = String(qd.errorCode || '');
 
-            // ─── Immer loggen bei den ersten 5 Versuchen, dann alle 10 ───
+            // Log bei ersten 5 + dann alle 10
             if (attempts <= 5 || attempts % 10 === 0) {
-                logger.info(`Poll #${attempts}/${maxAttempts} Response`, {
+                logger.info(`Poll #${attempts}`, {
                     transactionId,
                     success: qd.success,
-                    errorCode: qd.errorCode || 'null',
-                    errorMsg: qd.errorMsg || qd.errorMessage || 'null',
+                    errorCode: errCode || 'null',
                     hasObj: !!qd.obj,
-                    objKeys: qd.obj ? Object.keys(qd.obj).join(',') : 'N/A',
-                    responseSnippet: JSON.stringify(qd).substring(0, 600),
+                    snippet: JSON.stringify(qd).substring(0, 800),
                 });
             }
 
-            // ─── Noch nicht fertig? (errorCode vorhanden) ───
-            const errCode = String(qd.errorCode || '');
-            if (errCode && errCode !== '0' && errCode !== 'null') {
-                // 200010 = SM-DP+ still allocating → weiter pollen
-                if (errCode === '200010') {
-                    logger.debug(`SM-DP+ allocating (Poll #${attempts})`, { transactionId });
-                    continue;
-                }
-                // Alles was mit 2000 anfängt → wahrscheinlich temporär
-                if (errCode.startsWith('2000')) {
-                    logger.debug(`Temporärer Code ${errCode} (Poll #${attempts})`, { transactionId });
-                    continue;
-                }
-                // Alles andere → abbrechen
-                logger.error('eSIMAccess Query definitiver Fehler', {
-                    transactionId, errorCode: errCode,
-                    errorMsg: qd.errorMsg || qd.errorMessage,
-                });
-                throw new Error(`eSIMAccess Query-Fehler: [${errCode}] ${qd.errorMsg || qd.errorMessage || ''}`);
-            }
-
-            // ─── success ist true (oder kein errorCode) → eSIM-Daten suchen ───
-            if (!qd.obj) {
-                logger.debug(`Kein obj in Response (Poll #${attempts})`, { transactionId });
+            // ─── Noch nicht fertig? ───
+            // 200010 = "Profile is being downloaded for the order"
+            if (errCode === '200010') {
                 continue;
             }
 
-            // eSIM-Liste extrahieren – robuste Suche in verschiedenen Strukturen
-            let esimList = null;
-
-            if (Array.isArray(qd.obj.esimList) && qd.obj.esimList.length > 0) {
-                esimList = qd.obj.esimList;
-            } else if (Array.isArray(qd.obj.cards) && qd.obj.cards.length > 0) {
-                esimList = qd.obj.cards;
-            } else if (Array.isArray(qd.obj) && qd.obj.length > 0) {
-                esimList = qd.obj;
+            // Andere 2000xx Codes → temporär, weiter pollen
+            if (errCode && errCode.startsWith('2000') && errCode !== '0') {
+                logger.debug(`Temporärer Code ${errCode} (Poll #${attempts})`, { transactionId });
+                continue;
             }
+
+            // Definitiver Fehler (nicht 2000xx und nicht leer)
+            if (errCode && errCode !== '0' && errCode !== 'null' && errCode !== '') {
+                throw new Error(`Query-Fehler: [${errCode}] ${qd.errorMsg || qd.errorMessage || ''}`);
+            }
+
+            // ─── Erfolg → eSIM-Daten extrahieren ───
+            if (!qd.obj) continue;
+
+            const esimList = qd.obj.esimList
+                || qd.obj.cards
+                || (Array.isArray(qd.obj) ? qd.obj : null);
 
             if (!esimList || esimList.length === 0) {
-                logger.debug(`Keine eSIM-Liste gefunden (Poll #${attempts})`, {
-                    transactionId,
-                    objType: typeof qd.obj,
-                    objIsArray: Array.isArray(qd.obj),
-                    objKeysStr: typeof qd.obj === 'object' ? Object.keys(qd.obj).join(',') : 'N/A',
-                });
+                if (attempts <= 5) {
+                    logger.debug(`Leere esimList (Poll #${attempts})`, {
+                        transactionId,
+                        objKeys: Object.keys(qd.obj).join(','),
+                    });
+                }
                 continue;
             }
 
-            // ─── ICCID prüfen ───
-            const readyEsims = esimList.filter(e => e.iccid);
-
-            if (readyEsims.length === 0) {
-                logger.debug(`eSIMs ohne ICCID (Poll #${attempts})`, {
-                    transactionId,
-                    firstEsimKeys: Object.keys(esimList[0]).join(','),
-                    firstEsim: JSON.stringify(esimList[0]).substring(0, 300),
-                });
-                continue;
-            }
-
-            if (readyEsims.length < count) {
-                logger.debug(`${readyEsims.length}/${count} bereit (Poll #${attempts})`, { transactionId });
+            const ready = esimList.filter(e => e.iccid);
+            if (ready.length < count) {
+                logger.debug(`${ready.length}/${count} bereit (Poll #${attempts})`, { transactionId });
                 continue;
             }
 
             // ─── ERFOLG ───
-            const result = readyEsims.slice(0, count).map(esim => ({
-                iccid: esim.iccid,
-                shortUrl: esim.shortUrl || esim.qrcodeUrl || null,
+            const result = ready.slice(0, count).map(e => ({
+                iccid: e.iccid,
+                shortUrl: e.shortUrl || e.qrcodeUrl || null,
             }));
 
-            logger.info(`${result.length} eSIM(s) provisioniert nach ${attempts} Polls`, {
+            logger.info(`${result.length} eSIM(s) bereit nach ${attempts} Polls`, {
                 transactionId,
                 iccids: result.map(e => e.iccid),
                 urls: result.map(e => e.shortUrl),
@@ -206,45 +170,35 @@ async function orderESims(packageCode, count = 1) {
             return result;
 
         } catch (error) {
-            // Selbst geworfene Fehler → nicht weiter pollen
-            if (error.message.startsWith('eSIMAccess Query-Fehler:')) {
-                throw error;
-            }
+            if (error.message.startsWith('Query-Fehler:')) throw error;
+
             if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
-                logger.warn(`Query-Timeout (Poll #${attempts})`, { transactionId });
+                logger.warn(`Timeout (Poll #${attempts})`, { transactionId });
                 continue;
             }
             if (error.response?.status >= 500) {
-                logger.warn(`Query 5xx (Poll #${attempts})`, { transactionId, status: error.response.status });
+                logger.warn(`5xx (Poll #${attempts})`, { transactionId });
                 continue;
             }
             if (error.response?.status >= 400) {
-                logger.error(`Query ${error.response.status}`, {
-                    transactionId,
-                    responseBody: JSON.stringify(error.response.data),
+                logger.error(`4xx (Poll #${attempts})`, {
+                    transactionId, body: JSON.stringify(error.response.data),
                 });
                 throw error;
             }
-            logger.warn(`Query-Fehler (Poll #${attempts})`, { transactionId, error: error.message });
+            logger.warn(`Fehler (Poll #${attempts}): ${error.message}`, { transactionId });
         }
     }
 
-    const timeoutSec = (maxAttempts * pollInterval / 1000).toFixed(0);
-    logger.error(`Timeout nach ${timeoutSec}s`, { transactionId, orderNo, attempts: maxAttempts });
-    throw new Error(`eSIM-Provisionierung Timeout: Nach ${timeoutSec} Sekunden keine eSIM-Daten erhalten.`);
+    const secs = (maxAttempts * pollInterval / 1000).toFixed(0);
+    throw new Error(`Timeout: ${secs}s ohne eSIM-Daten (orderNo: ${orderNo})`);
 }
 
 async function getBalance() {
-    try {
-        const response = await axios.post(`${BASE_URL}/merchant/balance`, {}, {
-            headers: getHeaders(),
-            timeout: 10000,
-        });
-        return response.data.obj || response.data;
-    } catch (error) {
-        logger.error('Fehler beim Abrufen des eSIMAccess-Guthabens', { error: error.message });
-        throw error;
-    }
+    const response = await axios.post(`${BASE_URL}/merchant/balance`, {}, {
+        headers: getHeaders(), timeout: 10000,
+    });
+    return response.data.obj || response.data;
 }
 
 module.exports = { orderESims, getBalance };

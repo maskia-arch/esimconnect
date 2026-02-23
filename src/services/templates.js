@@ -1,13 +1,9 @@
 /**
  * Nachrichten-Templates für die eSIM-Lieferung.
+ * Platzhalter: %ESIM_LIST%
  *
- * WICHTIG: Sellauth zeigt die Antwort im "Deliverables"-Feld an.
- * Der Kunde hat dort "Kopieren Deliverables" und "Herunterladen Deliverables".
- * Deshalb: ICCID und URL OHNE Labels ausgeben, jeweils auf eigener Zeile,
- * damit beim Kopieren nur die reinen Daten im Clipboard landen.
- *
- * Platzhalter:
- *   %ESIM_LIST% — wird durch die formatierten eSIM-Daten ersetzt
+ * WICHTIG: Sellauth zeigt die Antwort als "Deliverables" an.
+ * ICCID und URL OHNE Labels, jeweils eigene Zeile → sauber kopierbar.
  */
 const templates = [
     `Hallo! Deine Bestellung ist einsatzbereit. Hier sind deine Daten:
@@ -92,44 +88,30 @@ Erste Schritte:
 ];
 
 /**
- * Formatiert eine einzelne eSIM als kopierbaren Block.
+ * Formatiert eine eSIM als kopierbaren Block.
+ * KEINE Labels — nur ICCID und URL auf eigener Zeile.
  *
- * Format (OHNE Labels, damit "Kopieren Deliverables" saubere Daten liefert):
- *
- *   --- eSIM 1 ---        (nur bei quantity > 1)
+ * Beispiel bei quantity=1:
  *   89852350924060003915
  *   https://esimaccess.com/e/xxxxx
  *
- * Jede Zeile ist einzeln kopierbar.
+ * Beispiel bei quantity>1:
+ *   --- eSIM 1 ---
+ *   89852350924060003915
+ *   https://esimaccess.com/e/xxxxx
  */
 function formatEsimBlock(esim, index, total) {
     const lines = [];
-
-    if (total > 1) {
-        lines.push(`--- eSIM ${index + 1} ---`);
-    }
-
+    if (total > 1) lines.push(`--- eSIM ${index + 1} ---`);
     lines.push(esim.iccid);
-
-    if (esim.shortUrl) {
-        lines.push(esim.shortUrl);
-    }
-
+    if (esim.shortUrl) lines.push(esim.shortUrl);
     return lines.join('\n');
 }
 
-/**
- * Erstellt die vollständige Liefernachricht.
- *
- * @param {Array<{iccid: string, shortUrl: string|null}>} esims
- * @returns {string} Formatierte Nachricht für den Kunden
- */
 function buildDeliveryMessage(esims) {
-    const blocks = esims.map((esim, i) => formatEsimBlock(esim, i, esims.length));
-    const esimListText = blocks.join('\n\n');
-
+    const blocks = esims.map((e, i) => formatEsimBlock(e, i, esims.length));
     const template = templates[Math.floor(Math.random() * templates.length)];
-    return template.replace('%ESIM_LIST%', esimListText);
+    return template.replace('%ESIM_LIST%', blocks.join('\n\n'));
 }
 
 module.exports = { buildDeliveryMessage };

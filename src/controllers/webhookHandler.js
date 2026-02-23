@@ -3,29 +3,31 @@ const statsService = require('../services/statsService');
 const { buildDeliveryMessage } = require('../services/templates');
 const logger = require('../services/logger');
 
-// ─── Duplikat-Schutz (In-Memory) ───
-// Speichert das ERGEBNIS einer Bestellung, nicht nur den Status.
-// Key → { status: 'processing' | 'done' | 'error', result: string|null }
-const orderCache = new Map();
-const ORDER_TTL = 60 * 60 * 1000; // 1 Stunde
-
 /**
- * Bereinigt abgelaufene Einträge aus dem Cache.
+ * Order-Cache: Speichert Ergebnis pro Bestellung.
+ *
+ * Schlüssel → {
+ *   status: 'processing' | 'done' | 'error',
+ *   result: string | null,       // die Deliverable-Nachricht (nur bei 'done')
+ *   orderNo: string | null,      // eSIMAccess orderNo (zum Nachverfolgen)
+ *   timestamp: number
+ * }
+ *
+ * REGELN:
+ * - 'processing' → 500 an Sellauth (NICHT als geliefert markieren)
+ * - 'done'       → gecachtes Ergebnis nochmal senden (200)
+ * - 'error'      → 500 an Sellauth, NICHT nochmal bestellen (eSIM wurde ja schon gekauft!)
  */
-function cleanupCache() {
+const orderCache = new Map();
+const CACHE_TTL = 2 * 60 * 60 * 1000; // 2 Stunden
+
+setInterval(() => {
     const now = Date.now();
     for (const [key, entry] of orderCache) {
-        if (now - entry.timestamp > ORDER_TTL) {
-            orderCache.delete(key);
-        }
+        if (now - entry.timestamp > CACHE_TTL) orderCache.delete(key);
     }
-}
+}, 10 * 60 * 1000);
 
-setInterval(cleanupCache, 5 * 60 * 1000);
-
-/**
- * Erstellt einen eindeutigen Schlüssel für die Bestellung.
- */
 function getOrderKey(req) {
     const body = req.body;
     if (body?.invoice_id) return `inv_${body.invoice_id}`;
@@ -40,11 +42,12 @@ function getOrderKey(req) {
 }
 
 /**
- * Sellauth Dynamic Delivery Webhook Handler.
+ * Sellauth Dynamic Delivery Webhook.
  *
- * WICHTIG: Sellauth interpretiert JEDE 200-Antwort als Lieferung.
- * Wir dürfen NUR mit 200 antworten wenn die echten eSIM-Daten drin sind.
- * Bei Fehlern → 500 (Sellauth versucht es ggf. erneut).
+ * KRITISCH:
+ * - 200 + text = Sellauth zeigt das als Deliverable → NUR mit echten eSIM-Daten!
+ * - 500 = Sellauth markiert als fehlgeschlagen → sicher bei Fehlern
+ * - NIEMALS doppelt bestellen, auch nicht bei Retry von Sellauth
  */
 async function handleWebhook(req, res) {
     const startTime = Date.now();
@@ -52,89 +55,93 @@ async function handleWebhook(req, res) {
     const quantity = parseInt(req.body?.item?.quantity, 10) || 1;
     const orderId = req.body?.invoice_id || req.body?.id || 'unknown';
 
-    // ─── Validierung ───
     if (!packageCode) {
-        logger.warn('Webhook ohne packageCode empfangen', { orderId });
-        return res.status(400).json({ error: 'Missing packageCode query parameter' });
+        return res.status(400).json({ error: 'Missing packageCode' });
     }
-
     if (quantity < 1 || quantity > 10) {
-        logger.warn('Ungültige Menge', { orderId, quantity });
-        return res.status(400).json({ error: 'Invalid quantity (1-10)' });
+        return res.status(400).json({ error: 'Invalid quantity' });
     }
 
-    // ─── Duplikat-Schutz ───
     const orderKey = getOrderKey(req);
     const cached = orderCache.get(orderKey);
 
+    // ─── Duplikat-Prüfung ───
     if (cached) {
-        if (cached.status === 'done' && cached.result) {
-            // Bestellung war schon erfolgreich → Ergebnis erneut senden
-            logger.info('Duplikat-Webhook: Sende gecachtes Ergebnis', { orderId, orderKey });
-            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-            return res.status(200).send(cached.result);
-        }
+        switch (cached.status) {
+            case 'done':
+                // Ergebnis existiert → nochmal liefern
+                logger.info('Duplikat: Sende gecachtes Ergebnis', { orderId, orderKey });
+                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+                return res.status(200).send(cached.result);
 
-        if (cached.status === 'processing') {
-            // Bestellung läuft gerade → 500 damit Sellauth NICHT als geliefert markiert
-            logger.warn('Duplikat-Webhook: Bestellung läuft noch', { orderId, orderKey });
-            return res.status(500).json({ error: 'Order still processing, please retry later' });
-        }
+            case 'processing':
+                // Läuft noch → 500 damit Sellauth NICHT als Lieferung wertet
+                logger.warn('Duplikat: Noch in Bearbeitung', { orderId, orderKey });
+                return res.status(500).json({ error: 'Still processing' });
 
-        // Status 'error' → nochmal versuchen (Eintrag löschen, weiter unten neu verarbeiten)
-        orderCache.delete(orderKey);
+            case 'error':
+                // Fehler war → NICHT nochmal bestellen! eSIM wurde bereits gekauft.
+                // 500 zurück, Admin muss manuell eingreifen.
+                logger.warn('Duplikat: Vorheriger Versuch fehlgeschlagen, keine Neubestellung', {
+                    orderId, orderKey,
+                });
+                return res.status(500).json({ error: 'Previous attempt failed. Manual intervention needed.' });
+        }
     }
 
-    // Als "processing" markieren
-    orderCache.set(orderKey, { status: 'processing', result: null, timestamp: Date.now() });
-
-    logger.info('Webhook empfangen – Starte eSIM-Bestellung', {
-        orderId, packageCode, quantity, orderKey,
+    // ─── Neue Bestellung ───
+    orderCache.set(orderKey, {
+        status: 'processing',
+        result: null,
+        orderNo: null,
+        timestamp: Date.now(),
     });
 
+    logger.info('Webhook → Starte Bestellung', { orderId, packageCode, quantity, orderKey });
+
     try {
-        // ─── eSIM(s) bestellen und auf Provisionierung warten ───
         const esims = await esimService.orderESims(packageCode, quantity);
 
         if (!esims || esims.length === 0) {
-            throw new Error('Keine eSIM-Daten von eSIMAccess erhalten');
+            throw new Error('Keine eSIM-Daten erhalten');
         }
 
-        // ─── Liefernachricht erstellen ───
         const deliveryMessage = buildDeliveryMessage(esims);
 
-        // ─── Im Cache speichern für Duplikat-Retries ───
-        orderCache.set(orderKey, { status: 'done', result: deliveryMessage, timestamp: Date.now() });
+        // Cache mit Ergebnis aktualisieren
+        orderCache.set(orderKey, {
+            status: 'done',
+            result: deliveryMessage,
+            orderNo: null,
+            timestamp: Date.now(),
+        });
 
-        // ─── Stats aktualisieren ───
         statsService.recordOrder(esims.length);
 
-        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-        logger.info(`Bestellung erfolgreich ausgeliefert in ${duration}s`, {
-            orderId, packageCode, esimCount: esims.length,
+        const dur = ((Date.now() - startTime) / 1000).toFixed(1);
+        logger.info(`Lieferung OK in ${dur}s`, {
+            orderId, esimCount: esims.length,
             iccids: esims.map(e => e.iccid),
         });
 
-        // ─── Antwort an Sellauth → wird dem Kunden als Deliverable angezeigt ───
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         return res.status(200).send(deliveryMessage);
 
     } catch (error) {
-        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-        logger.error(`Bestellfehler nach ${duration}s`, {
-            orderId, packageCode, quantity, error: error.message,
-        });
+        const dur = ((Date.now() - startTime) / 1000).toFixed(1);
+        logger.error(`Fehler nach ${dur}s`, { orderId, packageCode, error: error.message });
 
         statsService.recordError();
 
-        // Cache als Fehler markieren → nächster Retry darf neu verarbeiten
-        orderCache.set(orderKey, { status: 'error', result: null, timestamp: Date.now() });
-
-        // 500 → Sellauth markiert NICHT als geliefert
-        return res.status(500).json({
-            error: 'eSIM provisioning failed',
-            message: error.message,
+        // NICHT löschen! Verhindert Doppelbestellung bei Retry.
+        orderCache.set(orderKey, {
+            status: 'error',
+            result: null,
+            orderNo: null,
+            timestamp: Date.now(),
         });
+
+        return res.status(500).json({ error: 'Provisioning failed', message: error.message });
     }
 }
 
