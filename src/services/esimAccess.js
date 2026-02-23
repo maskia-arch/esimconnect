@@ -34,15 +34,20 @@ function generateTransactionId() {
  * - Logging deferred: only minimal logs on hot path
  * - Short axios timeouts to fail fast on network issues
  */
-async function orderESims(packageCode, count = 1) {
+async function orderESims(packageCode, count = 1, periodNum = null) {
     const txnId = generateTransactionId();
 
     // ─── Step 1: Place order ───
+    const packageInfo = { packageCode, count };
+    if (periodNum && periodNum > 0) {
+        packageInfo.periodNum = periodNum;
+    }
+
     let orderNo;
     try {
         const { data } = await client.post('/esim/order', {
             transactionId: txnId,
-            packageInfoList: [{ packageCode, count }],
+            packageInfoList: [packageInfo],
         }, { timeout: 15000 });
 
         if (!data.success || data.errorCode) {
@@ -52,7 +57,7 @@ async function orderESims(packageCode, count = 1) {
         orderNo = data.obj?.orderNo;
         if (!orderNo) throw new Error(`No orderNo in response: ${JSON.stringify(data)}`);
 
-        logger.info('Order placed', { txnId, orderNo, packageCode, count });
+        logger.info('Order placed', { txnId, orderNo, packageCode, count, periodNum: periodNum || 'N/A' });
 
     } catch (err) {
         if (err.response) {

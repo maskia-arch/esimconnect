@@ -47,6 +47,7 @@ function getOrderKey(req) {
 async function handleWebhook(req, res) {
     const t0 = Date.now();
     const packageCode = req.query.packageCode;
+    const periodNum = parseInt(req.query.periodNum, 10) || null;
     const quantity = parseInt(req.body?.item?.quantity, 10) || 1;
     const orderId = req.body?.invoice_id || req.body?.id || 'unknown';
     const orderKey = getOrderKey(req);
@@ -77,7 +78,7 @@ async function handleWebhook(req, res) {
 
     try {
         // ─── Order + Poll (this is the unavoidable wait) ───
-        const esims = await esimService.orderESims(packageCode, quantity);
+        const esims = await esimService.orderESims(packageCode, quantity, periodNum);
 
         if (!esims || esims.length === 0) {
             throw new Error('No eSIM data received');

@@ -6,49 +6,129 @@
 <title>eSIM Bridge — Admin</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; padding: 2rem; }
-  h1 { font-size: 1.5rem; margin-bottom: 1.5rem; color: #58a6ff; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
-  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.2rem; }
-  .card .label { font-size: 0.8rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
-  .card .value { font-size: 1.8rem; font-weight: 700; margin-top: 0.3rem; color: #f0f6fc; font-variant-numeric: tabular-nums; }
-  .card .value.green { color: #3fb950; }
-  .card .value.red { color: #f85149; }
-  .card .value.blue { color: #58a6ff; }
-  .sub { font-size: 0.75rem; color: #8b949e; margin-top: 0.3rem; }
-  #status { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; background: #238636; color: #fff; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; padding: 1.5rem; }
+  h1 { font-size: 1.4rem; margin-bottom: 1.2rem; color: #58a6ff; }
+  h2 { font-size: 1.1rem; margin-bottom: 0.8rem; color: #58a6ff; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.8rem; margin-bottom: 1.5rem; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; }
+  .card .label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
+  .card .value { font-size: 1.6rem; font-weight: 700; margin-top: 0.2rem; color: #f0f6fc; }
+  .green { color: #3fb950; }
+  .red { color: #f85149; }
+  .blue { color: #58a6ff; }
+
+  #status { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem; background: #238636; color: #fff; vertical-align: middle; }
   #status.err { background: #da3633; }
+
+  .builder { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.2rem; margin-bottom: 1.5rem; }
+  .form-row { display: flex; gap: 0.6rem; margin-bottom: 0.6rem; flex-wrap: wrap; align-items: end; }
+  .form-group { display: flex; flex-direction: column; flex: 1; min-width: 140px; }
+  .form-group label { font-size: 0.7rem; color: #8b949e; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  .form-group input { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 0.5rem 0.6rem; color: #e6edf3; font-size: 0.85rem; }
+  .form-group input:focus { outline: none; border-color: #58a6ff; }
+  .form-group .hint { font-size: 0.65rem; color: #6e7681; margin-top: 0.2rem; }
+
+  .output-box { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 0.7rem; font-family: 'SF Mono', Monaco, monospace; font-size: 0.8rem; color: #3fb950; word-break: break-all; min-height: 2.2rem; line-height: 1.4; margin-top: 0.6rem; cursor: pointer; position: relative; }
+  .output-box:hover { border-color: #58a6ff; }
+  .copied-msg { position: absolute; top: 50%; right: 0.6rem; transform: translateY(-50%); font-size: 0.7rem; color: #58a6ff; opacity: 0; transition: opacity 0.3s; }
+  .copied-msg.show { opacity: 1; }
+
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.65rem; margin-left: 0.3rem; }
+  .tag.opt { background: #1f2937; color: #8b949e; }
+  .tag.req { background: #3b1d1d; color: #f85149; }
 </style>
 </head>
 <body>
-  <h1>eSIM Bridge V1 <span id="status">loading...</span></h1>
-  <div class="grid">
-    <div class="card"><div class="label">Orders</div><div class="value green" id="orders">—</div></div>
-    <div class="card"><div class="label">eSIMs Delivered</div><div class="value blue" id="esims">—</div></div>
-    <div class="card"><div class="label">Errors</div><div class="value red" id="errors">—</div></div>
-    <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">—</div></div>
-    <div class="card"><div class="label">Last Order</div><div class="value" id="last" style="font-size:1rem">—</div></div>
+
+<h1>eSIM Bridge V1.2 <span id="status">loading...</span></h1>
+
+<div class="grid">
+  <div class="card"><div class="label">Orders</div><div class="value green" id="orders">—</div></div>
+  <div class="card"><div class="label">eSIMs</div><div class="value blue" id="esims">—</div></div>
+  <div class="card"><div class="label">Errors</div><div class="value red" id="errors">—</div></div>
+  <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">—</div></div>
+  <div class="card"><div class="label">Last Order</div><div class="value" id="last" style="font-size:0.85rem">—</div></div>
+</div>
+
+<div class="builder">
+  <h2>🔗 Webhook Link Builder</h2>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Server URL <span class="tag req">required</span></label>
+      <input type="text" id="serverUrl" placeholder="https://your-app.onrender.com">
+    </div>
   </div>
-  <script>
-    async function refresh() {
-      try {
-        const r = await fetch('/health', { headers: { 'Authorization': document.querySelector('meta[name=auth]')?.content || '' } });
-        const d = await r.json();
-        document.getElementById('status').textContent = 'online';
-        document.getElementById('status').className = '';
-        document.getElementById('orders').textContent = d.stats.totalOrders;
-        document.getElementById('esims').textContent = d.stats.totalEsims;
-        document.getElementById('errors').textContent = d.stats.errors;
-        const h = Math.floor(d.uptime/3600), m = Math.floor((d.uptime%3600)/60);
-        document.getElementById('uptime').textContent = `${h}h ${m}m`;
-        document.getElementById('last').textContent = d.stats.lastOrderAt ? new Date(d.stats.lastOrderAt).toLocaleString() : 'None';
-      } catch {
-        document.getElementById('status').textContent = 'offline';
-        document.getElementById('status').className = 'err';
+  <div class="form-row">
+    <div class="form-group">
+      <label>Package Code <span class="tag req">required</span></label>
+      <input type="text" id="pkgCode" placeholder="e.g. PWV7Q64TS">
+      <div class="hint">From eSIMAccess dashboard</div>
+    </div>
+    <div class="form-group">
+      <label>Days <span class="tag opt">optional</span></label>
+      <input type="number" id="periodNum" placeholder="e.g. 7" min="1" max="365">
+      <div class="hint">For daily/unlimited plans</div>
+    </div>
+  </div>
+
+  <div class="output-box" id="linkOutput" onclick="copyLink()">
+    <span style="color:#6e7681">Enter package code...</span>
+    <span class="copied-msg" id="copiedTag">Copied!</span>
+  </div>
+</div>
+
+<script>
+  async function refresh() {
+    try {
+      var r = await fetch('/health');
+      var d = await r.json();
+      document.getElementById('status').textContent = 'online';
+      document.getElementById('status').className = '';
+      document.getElementById('orders').textContent = d.stats.totalOrders;
+      document.getElementById('esims').textContent = d.stats.totalEsims;
+      document.getElementById('errors').textContent = d.stats.errors;
+      var h = Math.floor(d.uptime/3600), m = Math.floor((d.uptime%3600)/60);
+      document.getElementById('uptime').textContent = h + 'h ' + m + 'm';
+      document.getElementById('last').textContent = d.stats.lastOrderAt ? new Date(d.stats.lastOrderAt).toLocaleString() : 'None';
+      if (!document.getElementById('serverUrl').value) {
+        document.getElementById('serverUrl').value = window.location.origin;
       }
+    } catch(e) {
+      document.getElementById('status').textContent = 'offline';
+      document.getElementById('status').className = 'err';
     }
-    refresh();
-    setInterval(refresh, 15000);
-  </script>
+  }
+  refresh();
+  setInterval(refresh, 15000);
+
+  function buildLink() {
+    var base = document.getElementById('serverUrl').value.replace(/\/+$/, '');
+    var pkg = document.getElementById('pkgCode').value.trim();
+    var days = document.getElementById('periodNum').value.trim();
+    var out = document.getElementById('linkOutput');
+    if (!pkg) {
+      out.innerHTML = '<span style="color:#6e7681">Enter package code...</span><span class="copied-msg" id="copiedTag">Copied!</span>';
+      return;
+    }
+    var url = base + '/webhook?packageCode=' + encodeURIComponent(pkg);
+    if (days && parseInt(days) > 0) url += '&periodNum=' + parseInt(days);
+    out.innerHTML = url + '<span class="copied-msg" id="copiedTag">Copied!</span>';
+  }
+
+  function copyLink() {
+    var out = document.getElementById('linkOutput');
+    var text = out.textContent.replace('Copied!', '').trim();
+    if (!text || text.startsWith('Enter')) return;
+    navigator.clipboard.writeText(text);
+    var tag = document.getElementById('copiedTag');
+    tag.classList.add('show');
+    setTimeout(function() { tag.classList.remove('show'); }, 1500);
+  }
+
+  document.getElementById('serverUrl').addEventListener('input', buildLink);
+  document.getElementById('pkgCode').addEventListener('input', buildLink);
+  document.getElementById('periodNum').addEventListener('input', buildLink);
+</script>
 </body>
 </html>

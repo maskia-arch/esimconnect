@@ -1,9 +1,6 @@
 /**
  * Compact English templates for Sellauth.
- *
- * IMPORTANT: Sellauth's deliverables column is narrow (~35 chars).
- * All lines must be short enough to avoid ugly word wrapping.
- * Max ~35 characters per line for clean display.
+ * All lines max ~30 chars to avoid word wrapping.
  */
 
 const singleTemplates = [
